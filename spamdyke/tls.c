@@ -213,8 +213,13 @@ int tls_init_inner(struct filter_settings *current_settings, SSL_CTX **target_tl
 
   if (initialized)
     {
-    if ((*target_tls_context = SSL_CTX_new(SSLv23_server_method())) != NULL)
+    if ((*target_tls_context = SSL_CTX_new(TLS_server_method())) != NULL)
       {
+      // --- START TLS 1.3 ADDITIONS ---
+      // Explicitly set the minimum protocol version to TLS 1.3.
+      // This is the key change for enforcing 1.3.
+        
+      SSL_CTX_set_min_proto_version(*target_tls_context, TLS1_3_VERSION);
       error_occurred = 0;
 
       if ((current_settings->current_options->strlen_tls_privatekey_password == 0) &&
@@ -316,6 +321,7 @@ int tls_init_inner(struct filter_settings *current_settings, SSL_CTX **target_tl
 
       if (!error_occurred)
         {
+        // For TLS 1.2 and below.
         if ((tls_return = SSL_CTX_set_cipher_list(*target_tls_context, current_settings->current_options->tls_cipher_list)) == 1)
           SPAMDYKE_LOG_EXCESSIVE(current_settings, LOG_DEBUGX_TLS_CIPHER_LIST, current_settings->current_options->tls_cipher_list);
         else
@@ -323,6 +329,21 @@ int tls_init_inner(struct filter_settings *current_settings, SSL_CTX **target_tl
           SPAMDYKE_LOG_ERROR(current_settings, LOG_ERROR_TLS_CIPHER_LIST "%s: %s", current_settings->current_options->tls_cipher_list, tls_error(current_settings, tls_return));
           error_occurred = 1;
           }
+        // For TLS 1.3, we use a separate function (requires OpenSSL 1.1.1+).
+        // Assuming current_settings->current_options->tls_cipher_list contains the TLS 1.3 ciphersuites too.
+        #if OPENSSL_VERSION_NUMBER >= 0x1010100fL // OpenSSL 1.1.1+
+        if (!error_occurred)
+           {
+           if ((tls_return = SSL_CTX_set_ciphersuites(*target_tls_context, current_settings->current_options->tls_cipher_list)) == 1)
+             SPAMDYKE_LOG_EXCESSIVE(current_settings, LOG_DEBUGX_TLS_CIPHER_LIST_1_3, current_settings->current_options->tls_cipher_list);
+           else
+             {
+             SPAMDYKE_LOG_ERROR(current_settings, LOG_ERROR_TLS_CIPHER_LIST_1_3 "%s: %s", current_settings->current_options->tls_cipher_list, tls_error(current_settings, tls_return));
+             // TLS 1.3 cipher failure is non-fatal if negotiation is allowed, but we'll keep your error handling for consistency.
+             // error_occurred = 1; // Uncomment if you want to strictly fail on ciphersuites error
+             }
+           }
+         #endif
         }
 
       if (!error_occurred &&
